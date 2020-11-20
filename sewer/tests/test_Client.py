@@ -2,23 +2,50 @@
 # not to pollute the global namespace.
 # see: https://python-packaging.readthedocs.io/en/latest/testing.html
 
-from unittest import mock
+# Have had to sprinkle the pylint pragma "disable=E1125" in the TestCase
+# classes because pylint just won't shut up about missing required keywords
+# that are passed as **kwargs.  If I had time to piss away on it the pragma
+# could be added to individual calls.  Not!
+
+# Also, you can't write out the pragma in a comment like the above without
+# having pylint notice it - and in this case give an error for it at module
+# scope.  So reminiscent of the bad side of ol' lint.
+
+
+from unittest import expectedFailure, mock, TestCase
+
 import cryptography
-from unittest import TestCase
 
 import sewer.client
-from sewer.config import ACME_DIRECTORY_URL_STAGING
 
+from ..config import ACME_DIRECTORY_URL_STAGING
+from ..crypto import AcmeKey, AcmeAccount
+from ..lib import AcmeRegistrationError
 from . import test_utils
 
 LOG_LEVEL = "CRITICAL"
 
-usual_ACME = {
-    "ACME_REQUEST_TIMEOUT": 1,
-    "ACME_AUTH_STATUS_WAIT_PERIOD": 0,
-    "ACME_DIRECTORY_URL": ACME_DIRECTORY_URL_STAGING,
-    "LOG_LEVEL": LOG_LEVEL,
-}
+### FIX ME ### even with making the keys new each time, some tests manage to re-register!
+# luckily it's working anyway, but it's a good thing most of this will have to be scrapped soon
+
+
+def keys_for_ACME(no_kid=False):
+    acct = AcmeAccount.create("secp256r1")
+    ck = AcmeKey.create("secp256r1")
+    if not no_kid:
+        acct.kid = "https://imagine.acct.kid/here"
+    return {"account": acct, "cert_key": ck}
+
+
+def usual_ACME(no_kid=False):
+    res = {
+        "ACME_REQUEST_TIMEOUT": 1,
+        "ACME_AUTH_STATUS_WAIT_PERIOD": 0,
+        "ACME_DIRECTORY_URL": ACME_DIRECTORY_URL_STAGING,
+        "LOG_LEVEL": LOG_LEVEL,
+    }
+    res.update(keys_for_ACME(no_kid))
+    return res
 
 
 class TestClient(TestCase):
@@ -33,6 +60,8 @@ class TestClient(TestCase):
             should be in different testClasses
     """
 
+    # pylint: disable=E1125
+
     def setUp(self):
         self.domain_name = "example.com"
         with mock.patch("requests.post", return_value=test_utils.MockResponse()), mock.patch(
@@ -41,7 +70,7 @@ class TestClient(TestCase):
 
             self.provider = test_utils.ExmpleHttpProvider()
             self.client = sewer.client.Client(
-                domain_name=self.domain_name, provider=self.provider, **usual_ACME
+                domain_name=self.domain_name, provider=self.provider, **usual_ACME()
             )
 
     def tearDown(self):
@@ -58,6 +87,7 @@ class TestClient(TestCase):
                     provider=test_utils.ExmpleHttpProvider(),
                     ACME_DIRECTORY_URL=ACME_DIRECTORY_URL_STAGING,
                     LOG_LEVEL=LOG_LEVEL,
+                    **keys_for_ACME(),
                 )
 
             self.assertRaises(ValueError, mock_create_acme_client)
@@ -73,38 +103,6 @@ class TestClient(TestCase):
             for i in ["python-requests", "sewer", "https://github.com/komuw/sewer"]:
                 self.assertIn(i, self.client.User_Agent)
 
-    def test_certificate_key_is_generated(self):
-        with mock.patch("requests.post", return_value=test_utils.MockResponse()), mock.patch(
-            "requests.get", return_value=test_utils.MockResponse()
-        ):
-
-            certificate_key = self.client.certificate_key
-
-            certificate_key_private_key = cryptography.hazmat.primitives.serialization.load_pem_private_key(
-                certificate_key.encode(),
-                password=None,
-                backend=cryptography.hazmat.backends.default_backend(),
-            )
-            self.assertIsInstance(
-                certificate_key_private_key, cryptography.hazmat.backends.openssl.rsa._RSAPrivateKey
-            )
-
-    def test_account_key_is_generated(self):
-        with mock.patch("requests.post", return_value=test_utils.MockResponse()), mock.patch(
-            "requests.get", return_value=test_utils.MockResponse()
-        ):
-
-            account_key = self.client.account_key
-
-            account_key_private_key = cryptography.hazmat.primitives.serialization.load_pem_private_key(
-                account_key.encode(),
-                password=None,
-                backend=cryptography.hazmat.backends.default_backend(),
-            )
-            self.assertIsInstance(
-                account_key_private_key, cryptography.hazmat.backends.openssl.rsa._RSAPrivateKey
-            )
-
     def test_acme_registration_is_done(self):
         with mock.patch("requests.post", return_value=test_utils.MockResponse()), mock.patch(
             "requests.get", return_value=test_utils.MockResponse()
@@ -114,17 +112,15 @@ class TestClient(TestCase):
             self.assertTrue(mock_acme_registration.called)
 
     def test_acme_registration_failure_doesnt_result_in_certificate(self):
+        client = sewer.client.Client(
+            domain_name=self.domain_name, provider=self.provider, **usual_ACME(no_kid=True)
+        )
         with mock.patch(
             "requests.post", return_value=test_utils.MockResponse(status_code=400)
         ), mock.patch("requests.get", return_value=test_utils.MockResponse(status_code=400)):
 
-            def mock_get_certificate():
-                self.client.cert()
-
-            self.assertRaises(ValueError, mock_get_certificate)
-            with self.assertRaises(ValueError) as raised_exception:
-                mock_get_certificate()
-            self.assertIn("Error while registering", str(raised_exception.exception))
+            with self.assertRaises(AcmeRegistrationError):
+                client.get_certificate()
 
     def test_get_identifier_authorization_is_called(self):
         gia_return_value = {
@@ -258,20 +254,20 @@ class TestClient(TestCase):
                 domain_name=self.domain_name,
                 provider=self.provider,
                 domain_alt_names="domain_alt_names",
-                **usual_ACME,
+                **usual_ACME(),
             )
 
         with self.assertRaises(ValueError) as raised_exception:
             mock_instantiate_client()
-        self.assertIn(
-            "domain_alt_names should be of type:: None or list", str(raised_exception.exception)
-        )
+        self.assertIn("None or a list of strings", str(raised_exception.exception))
 
 
 class TestClientForSAN(TestClient):
     """
     Test Acme client for SAN certificates.
     """
+
+    # pylint: disable=E1125
 
     def setUp(self):
         self.domain_alt_names = [
@@ -290,7 +286,7 @@ class TestClientForSAN(TestClient):
                 domain_name="exampleSAN.com",
                 dns_class=self.dns_class,
                 domain_alt_names=self.domain_alt_names,
-                **usual_ACME,
+                **usual_ACME(),
             )
         super(TestClientForSAN, self).setUp()
 
@@ -299,6 +295,8 @@ class TestClientForWildcard(TestClient):
     """
     Test Acme client for wildard certificates.
     """
+
+    # pylint: disable=E1125
 
     def setUp(self):
         self.domain_alt_names = [
@@ -318,7 +316,7 @@ class TestClientForWildcard(TestClient):
                 dns_class=self.dns_class,
                 domain_alt_names=self.domain_alt_names,
                 ACME_AUTH_STATUS_MAX_CHECKS=1,
-                **usual_ACME,
+                **usual_ACME(),
             )
         super(TestClientForWildcard, self).setUp()
 
@@ -327,6 +325,8 @@ class TestClientDnsApiCompatibility(TestCase):
     """
     Test Acme client support with the deprecated dns_class parameter.
     """
+
+    # pylint: disable=E1125
 
     def setUp(self):
         self.domain_name = "example.com"
@@ -338,7 +338,7 @@ class TestClientDnsApiCompatibility(TestCase):
 
             self.dns_class = test_utils.ExmpleDnsProvider()
             self.client = sewer.client.Client(
-                domain_name=self.domain_name, dns_class=self.dns_class, **usual_ACME
+                domain_name=self.domain_name, dns_class=self.dns_class, **usual_ACME()
             )
 
     def test_get_get_acme_endpoints_failure_results_in_exception_with(self):
@@ -352,6 +352,7 @@ class TestClientDnsApiCompatibility(TestCase):
                     dns_class=test_utils.ExmpleDnsProvider(),  # NOTE: dns_class used here
                     ACME_DIRECTORY_URL=ACME_DIRECTORY_URL_STAGING,
                     LOG_LEVEL=LOG_LEVEL,
+                    **keys_for_ACME(),
                 )
 
             self.assertRaises(ValueError, mock_create_acme_client)
@@ -387,20 +388,22 @@ class TestClientDnsApiCompatibility(TestCase):
                 domain_name=self.domain_name,
                 dns_class=self.dns_class,  # NOTE: dns_class used here
                 domain_alt_names="domain_alt_names",
-                **usual_ACME,
+                **usual_ACME(),
             )
 
         with self.assertRaises(ValueError) as raised_exception:
             mock_instantiate_client()
-        self.assertIn(
-            "domain_alt_names should be of type:: None or list", str(raised_exception.exception)
-        )
+        self.assertIn("None or a list of strings", str(raised_exception.exception))
 
 
 class TestClientUnits(TestCase):
+
+    # pylint: disable=E1125
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.mock_args = {"domain_name": "example.com", "LOG_LEVEL": LOG_LEVEL}
+        self.mock_args.update(keys_for_ACME())
         self.mock_challenges = [{"ident_value": "example.com", "key_auth": "abcdefgh12345678"}]
 
     def mock_sewer(self, provider):
@@ -420,8 +423,8 @@ class TestClientUnits(TestCase):
         self.mock_sewer(provider=p).propagation_delay(self.mock_challenges)
 
     def test03_prop_timeout_timeout(self):
-        # with default [1,2,4,8] sleep times and delay of 5, needs >4 failures to hit exception
-        p = test_utils.ExmpleDNS(prop_timeout=5, fail_prop_count=5)
+        # with default [1,2,4,8] sleep times and timeout of 2, needs 3 failures to timeout
+        p = test_utils.ExmpleDNS(prop_timeout=2, fail_prop_count=3)
         with self.assertRaises(RuntimeError):
             self.mock_sewer(provider=p).propagation_delay(self.mock_challenges)
 

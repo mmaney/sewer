@@ -1,11 +1,7 @@
 import collections
 
-try:
-    route53_dependencies = True
-    import boto3
-    from botocore.client import Config
-except ImportError:
-    route53_dependencies = False
+import boto3  # type: ignore
+from botocore.client import Config  # type: ignore
 
 from . import common
 
@@ -16,11 +12,9 @@ class Route53Dns(common.BaseDns):
     connect_timeout = 30
     read_timeout = 30
 
-    def __init__(self, access_key_id=None, secret_access_key=None, **kwargs):
-        if not route53_dependencies:
-            raise ImportError(
-                """You need to install Route53Dns dependencies. run; pip3 install sewer[route53]"""
-            )
+    def __init__(self, access_key_id=None, secret_access_key=None, client=None, **kwargs):
+        if (access_key_id or secret_access_key) and client:
+            raise RuntimeError("Pass keys OR preconfigured client, not both")
 
         self.aws_config = Config(
             connect_timeout=self.connect_timeout, read_timeout=self.read_timeout
@@ -33,6 +27,9 @@ class Route53Dns(common.BaseDns):
                 aws_secret_access_key=secret_access_key,
                 config=self.aws_config,
             )
+        elif client:
+            # Use the client passed in from the caller.
+            self.r53 = client
         else:
             # let boto3 find credential
             # https://boto3.readthedocs.io/en/latest/guide/configuration.html#best-practices-for-configuring-credentials

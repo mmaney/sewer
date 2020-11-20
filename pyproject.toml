@@ -1,0 +1,36 @@
+[tool.coverage.run]
+command_line = "-m pytest"
+source = ["sewer"]
+omit = [
+    "*test*",
+    "*__init__.py"
+]
+data_file = "tests/coverage/.coverage"
+
+[tool.coverage.report]
+fail_under = 85
+show_missing = true
+omit = [
+    "*__main__.py",
+    "*acme.py",
+    "*cli.py"
+]
+
+[tool.coverage.html]
+directory = "tests/data/coverage/html"
+
+
+[tool.pytest.ini_options]
+console_output_style = "classic"
+addopts = "--color=no"
+
+
+# nigri delenda est - getting to be more trouble than help (no, NOT kwargs, )
+[tool.black]
+line-length = 100
+target-version = [
+    "py35",
+    "py36",
+    "py37",
+    "py38"
+]

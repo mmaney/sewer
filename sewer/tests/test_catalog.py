@@ -1,10 +1,9 @@
-import logging
 import unittest
 
 from .. import auth, catalog
 
 
-class TestLib(unittest.TestCase):
+class TestCatalog(unittest.TestCase):
     def test01_ProviderCatalog_create(self):
         cat = catalog.ProviderCatalog()
         self.assertIsInstance(cat, catalog.ProviderCatalog)

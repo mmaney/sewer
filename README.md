@@ -1,24 +1,27 @@
-## Sewer          
+## Sewer
 
 [![Codacy Badge](https://api.codacy.com/project/badge/Grade/ccf655afb3974e9698025cbb65949aa2)](https://www.codacy.com/app/komuW/sewer?utm_source=github.com&amp;utm_medium=referral&amp;utm_content=komuW/sewer&amp;utm_campaign=Badge_Grade)
 [![CircleCI](https://circleci.com/gh/komuw/sewer.svg?style=svg)](https://circleci.com/gh/komuw/sewer)
 [![codecov](https://codecov.io/gh/komuW/sewer/branch/master/graph/badge.svg)](https://codecov.io/gh/komuW/sewer)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/komuw/sewer)
 
-
 Sewer is a Let's Encrypt(ACME) client.  
 It's name is derived from Kenyan hip hop artiste, Kitu Sewer.  
 
-- The current release is [0.8.3](https://komuw.github.io/sewer/notes/0.8.3-notes).
-- More history in the [CHANGELOG](https://komuw.github.io/sewer/CHANGELOG).
+- The stable release is
+  [0.8.4](https://komuw.github.io/sewer/notes/0.8.4-notes).
+- More history (including notes on 0.8.5-to-be) in the
+  [CHANGELOG](https://komuw.github.io/sewer/CHANGELOG).
 
-> **NB:** sewer is mostly compatible with CPython back to 3.5, but f-strings
-in particular keep trying to creep in.  As of 0.8.3 none of the core code
-nor included drivers require f-strings, but they've been showing up in
-recent contributions and are already in a fair bit of test code.  _Expect to
-need at least 3.6+ for sewer 0.9._ I would prefer to maintain 3.5
-compatibility until then, but it's not currently tested in CI.  I will be
-happy to accept patches for any issues that show up.  — @mmaney
+PYTHON compatibility: 3.5 is still supported, though I believe at least one
+driver contains incompatible code (I have no way to actually test it, and
+sometimes these new features have been backported in 3.x.later).  As of
+0.8.5 I'm still trying not to break 3.5, but that oldest officially
+supported version is probably going to take a bump.  You already cannot run
+all the dev tests under 3.5 (black is one obvious one)...
+
+I (maintainer @mmaney) loiter in channel ##sewer (on irc.freenode.net) for
+those who remember IRC.  Don't ask to ask, but waiting is.
 
 ## Features
 - Obtain or renew SSL/TLS certificates from [Let's Encrypt](https://letsencrypt.org)
@@ -26,6 +29,7 @@ happy to accept patches for any issues that show up.  — @mmaney
 - Support for SAN certificates.
 - Supports [wildcard certificates](https://komuw.github.io/sewer/wildcards).
 - Bundling certificates.
+- Support for both RSA and ECDSA for account and certificate keys.
 - Supports [DNS and HTTP](https://komuw.github.io/sewer/UnifiedProvider) challenges
   - List of currently supported
     [DNS services and BYO-service notes](https://komuw.github.io/sewer/dns-01)
@@ -81,12 +85,14 @@ pip3 install sewer
 # pip3 install sewer[powerdns]
 ```
 
-sewer(since version 0.5.0) is now python3 only. To install the (now unsupported) python2 version, run;
+sewer(since version 0.5.0) is now python3 only.  To install the (now
+unsupported) python2 version:
 
 ```shell
 pip install sewer==0.3.0
 ```
-Sewer is in active development and it's API ~~may~~ will change in backward incompatible ways.
+
+Sewer is in active development and it's API will change in backward incompatible ways.
 [https://pypi.python.org/pypi/sewer](https://pypi.python.org/pypi/sewer)
 
 ## Development setup

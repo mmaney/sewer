@@ -1,16 +1,13 @@
-import binascii, json, time, platform
+import json, time, platform
 from hashlib import sha256
-from typing import Optional, Dict, Sequence, Tuple, Union, cast
+from typing import Dict, Sequence, Tuple, Union
 
-# used to just import cryptography, which worked only because other modules did more :-(
-import cryptography.hazmat.primitives.serialization
-import cryptography.hazmat.backends
-import OpenSSL.crypto
 import requests
 
 from .auth import ChalListType, ErrataListType, ProviderBase
 from .config import ACME_DIRECTORY_URL_PRODUCTION
-from .lib import create_logger, log_response, safe_base64, sewer_meta
+from .crypto import AcmeCsr, AcmeKey, AcmeAccount
+from .lib import create_logger, log_response, safe_base64, sewer_meta, AcmeRegistrationError
 
 
 class Client:
@@ -20,14 +17,14 @@ class Client:
 
     def __init__(
         self,
+        *,
         domain_name: str,
+        account: AcmeAccount,
+        cert_key: AcmeKey,
+        is_new_acct=False,
         dns_class: ProviderBase = None,
         domain_alt_names: Sequence[str] = None,
         contact_email: str = None,
-        account_key: str = None,
-        certificate_key: str = None,
-        bits: int = 2048,
-        digest: str = "sha256",
         provider: ProviderBase = None,
         ACME_REQUEST_TIMEOUT: int = 7,
         ACME_AUTH_STATUS_WAIT_PERIOD: int = 8,
@@ -39,44 +36,31 @@ class Client:
 
         ### do some type checking of some parameters
 
-        ### FIX ME ### spotty and not always complete; also, should raise TypeError, not ValueError
+        ### FIX ME ### spotty and not always complete; some should raise TypeError, not ValueError
 
         if not isinstance(domain_alt_names, (type(None), list)):
             raise ValueError(
-                """domain_alt_names should be of type:: None or list. You entered {0}""".format(
-                    type(domain_alt_names)
-                )
+                "domain_alt_names should be None or a list of strings, not %s" % domain_alt_names
             )
-        elif not isinstance(contact_email, (type(None), str)):
+
+        if not isinstance(contact_email, (type(None), str)):
+            raise ValueError("contact_email should be None or a string, not %s" % contact_email)
+
+        if LOG_LEVEL.upper() not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
             raise ValueError(
-                """contact_email should be of type:: None or str. You entered {0}""".format(
-                    type(contact_email)
-                )
+                "LOG_LEVEL must be one of 'DEBUG', 'INFO', 'WARNING', 'ERROR' or 'CRITICAL'"
             )
-        elif not isinstance(account_key, (type(None), str)):
+
+        if dns_class is not None and provider is not None:
             raise ValueError(
-                """account_key should be of type:: None or str. You entered {0}.
-                More specifically, account_key should be the result of reading an ssl account certificate""".format(
-                    type(account_key)
-                )
+                "Client was passed both the DEPRECATED dns_class argument and provider."
             )
-        elif not isinstance(certificate_key, (type(None), str)):
-            raise ValueError(
-                """certificate_key should be of type:: None or str. You entered {0}.
-                More specifically, certificate_key should be the result of reading an ssl certificate""".format(
-                    type(certificate_key)
-                )
-            )
-        elif LOG_LEVEL.upper() not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
-            raise ValueError(
-                """LOG_LEVEL should be one of; 'DEBUG', 'INFO', 'WARNING', 'ERROR' or 'CRITICAL'. not {0}""".format(
-                    LOG_LEVEL
-                )
-            )
-        elif dns_class is not None and provider is not None:
-            raise ValueError(
-                "passed both the DEPRECATED 'dns_class' parameter as well as 'provider'."
-            )
+
+        if not isinstance(account, AcmeAccount):
+            raise TypeError("The account argument must be an AcmeAccount.")
+
+        if not isinstance(cert_key, AcmeKey):
+            raise TypeError("The argument cert_key must be an AcmeKey.")
 
         ### setup Client's global variables
 
@@ -92,14 +76,16 @@ class Client:
             domain_alt_names = []
         self.domain_alt_names = list(set(domain_alt_names))
         self.contact_email = contact_email
-        self.bits = bits
-        self.digest = digest
         self.ACME_REQUEST_TIMEOUT = ACME_REQUEST_TIMEOUT
         self.ACME_AUTH_STATUS_WAIT_PERIOD = ACME_AUTH_STATUS_WAIT_PERIOD
         self.ACME_AUTH_STATUS_MAX_CHECKS = ACME_AUTH_STATUS_MAX_CHECKS
         self.ACME_DIRECTORY_URL = ACME_DIRECTORY_URL
         self.ACME_VERIFY = ACME_VERIFY
         self.LOG_LEVEL = LOG_LEVEL.upper()
+
+        self.account = account
+        self.cert_key = cert_key
+        self.is_new_acct = is_new_acct
 
         self.logger = create_logger(__name__, LOG_LEVEL)
 
@@ -114,19 +100,7 @@ class Client:
             self.ACME_NEW_ORDER_URL = acme_endpoints["newOrder"]
             self.ACME_REVOKE_CERT_URL = acme_endpoints["revokeCert"]
 
-            # unique account identifier
-            # https://tools.ietf.org/html/draft-ietf-acme-acme#section-6.2
-            self.kid = None
-
-            self.certificate_key = certificate_key or self.create_certificate_key()
-            self.csr = self.create_csr()
-
-            if not account_key:
-                self.account_key = self.create_account_key()
-                self.PRIOR_REGISTERED = False
-            else:
-                self.account_key = account_key
-                self.PRIOR_REGISTERED = True
+            self.acme_csr = AcmeCsr(cn=domain_name, san=domain_alt_names, key=self.cert_key)
 
             if dns_class is not None:
                 self.logger.warning(
@@ -182,7 +156,7 @@ class Client:
         if "UserAgent" not in headers:
             headers["UserAgent"] = self.User_Agent
 
-        kwargs: Dict[str, Union[str, int]] = {"timeout": self.ACME_REQUEST_TIMEOUT}
+        kwargs = {"timeout": self.ACME_REQUEST_TIMEOUT}  # type: Dict[str, Union[str, int]]
 
         ### FIX ME ### can get current bogus cert from pebble, figure out how to use it here?
 
@@ -229,71 +203,17 @@ class Client:
             )
         return get_acme_endpoints
 
-    def create_certificate_key(self):
-        self.logger.debug("create_certificate_key")
-        return self.create_key().decode()
-
-    def create_account_key(self):
-        self.logger.debug("create_account_key")
-        return self.create_key().decode()
-
-    def create_key(self, key_type=OpenSSL.crypto.TYPE_RSA):
-        key = OpenSSL.crypto.PKey()
-        key.generate_key(key_type, self.bits)
-        private_key = OpenSSL.crypto.dump_privatekey(OpenSSL.crypto.FILETYPE_PEM, key)
-        return private_key
-
-    def create_csr(self):
-        """
-        https://tools.ietf.org/html/draft-ietf-acme-acme#section-7.4
-        The CSR is sent in the base64url-encoded version of the DER format. (NB: this
-        field uses base64url, and does not include headers, it is different from PEM.)
-        """
-        self.logger.debug("create_csr")
-        X509Req = OpenSSL.crypto.X509Req()
-        X509Req.get_subject().CN = self.domain_name
-
-        if self.domain_alt_names:
-            SAN = "DNS:{0}, ".format(self.domain_name).encode("utf8") + ", ".join(
-                "DNS:" + i for i in self.domain_alt_names
-            ).encode("utf8")
-        else:
-            SAN = "DNS:{0}".format(self.domain_name).encode("utf8")
-
-        X509Req.add_extensions(
-            [
-                OpenSSL.crypto.X509Extension(
-                    "subjectAltName".encode("utf8"), critical=False, value=SAN
-                ),
-                # OpenSSL.crypto.X509Extension(b"tlsfeature", critical=False, value=b"status_request")
-            ]
-        )
-        pk = OpenSSL.crypto.load_privatekey(
-            OpenSSL.crypto.FILETYPE_PEM, self.certificate_key.encode()
-        )
-        X509Req.set_pubkey(pk)
-        X509Req.set_version(2)
-        X509Req.sign(pk, self.digest)
-        return OpenSSL.crypto.dump_certificate_request(OpenSSL.crypto.FILETYPE_ASN1, X509Req)
+    ### FIX ME ### this is a kludge to fix Alec's needs until there's time to do the Acme* refactor
 
     def acme_register(self):
-        """
-        https://tools.ietf.org/html/draft-ietf-acme-acme#section-7.3
-        The server creates an account and stores the public key used to
-        verify the JWS (i.e., the "jwk" element of the JWS header) to
-        authenticate future requests from the account.
-        The server returns this account object in a 201 (Created) response, with the account URL
-        in a Location header field.
-        This account URL will be used in subsequest requests to ACME, as the "kid" value in the acme header.
-        If the server already has an account registered with the provided
-        account key, then it MUST return a response with a 200 (OK) status
-        code and provide the URL of that account in the Location header field.
-        If there is an existing account with the new key
-        provided, then the server SHOULD use status code 409 (Conflict) and
-        provide the URL of that account in the Location header field
-        """
-        self.logger.info("acme_register (newAccount)")
-        if self.PRIOR_REGISTERED:
+
+        self.logger.info("acme_register%s" % " (is new account)" if self.is_new_acct else "")
+
+        if self.account.has_kid():
+            self.logger.info("acme_register: key was already registered")
+            return None
+
+        if not self.is_new_acct:
             payload = {"onlyReturnExisting": True}
         elif self.contact_email:
             payload = {
@@ -304,28 +224,26 @@ class Client:
             payload = {"termsOfServiceAgreed": True}
 
         url = self.ACME_NEW_ACCOUNT_URL
-        acme_register_response = self.make_signed_acme_request(
+        response = self.make_signed_acme_request(
             url=url, payload=json.dumps(payload), needs_jwk=True
         )
         self.logger.debug(
-            "acme_register_response. status_code={0}. response={1}".format(
-                acme_register_response.status_code, log_response(acme_register_response)
+            "response. status_code={0}. response={1}".format(
+                response.status_code, log_response(response)
             )
         )
 
-        if acme_register_response.status_code not in [201, 200, 409]:
-            raise ValueError(
+        if response.status_code not in [201, 200, 409]:
+            raise AcmeRegistrationError(
                 "Error while registering: status_code={status_code} response={response}".format(
-                    status_code=acme_register_response.status_code,
-                    response=log_response(acme_register_response),
+                    status_code=response.status_code, response=log_response(response),
                 )
             )
 
-        kid = acme_register_response.headers["Location"]
-        setattr(self, "kid", kid)
+        self.account.set_kid(response.headers["Location"])
 
         self.logger.info("acme_register_success")
-        return acme_register_response
+        return response
 
     def apply_for_cert_issuance(self):
         """
@@ -430,7 +348,7 @@ class Client:
 
     def get_keyauthorization(self, token):
         self.logger.debug("get_keyauthorization")
-        acme_header_jwk_json = json.dumps(self.get_jwk(), sort_keys=True, separators=(",", ":"))
+        acme_header_jwk_json = json.dumps(self.account.jwk(), sort_keys=True, separators=(",", ":"))
         acme_thumbprint = safe_base64(sha256(acme_header_jwk_json.encode("utf8")).digest())
         acme_keyauthorization = "{0}.{1}".format(token, acme_thumbprint)
 
@@ -451,20 +369,17 @@ class Client:
         The server MUST provide information about its retry state to the
         client via the "errors" field in the challenge and the Retry-After
         """
-        self.logger.info("check_authorization_status")
+        self.logger.debug("check_authorization_status")
         desired_status = desired_status or ["pending", "valid"]
         number_of_checks = 0
         while True:
             time.sleep(self.ACME_AUTH_STATUS_WAIT_PERIOD)
-            check_authorization_status_response = self.make_signed_acme_request(
-                authorization_url, payload=""
-            )
-            authorization_status = check_authorization_status_response.json()["status"]
+            response = self.make_signed_acme_request(authorization_url, payload="")
+            authorization_status = response.json()["status"]
             number_of_checks = number_of_checks + 1
             self.logger.debug(
-                "check_authorization_status_response. status_code={0}. response={1}".format(
-                    check_authorization_status_response.status_code,
-                    log_response(check_authorization_status_response),
+                "response. status_code={0}. response={1}".format(
+                    response.status_code, log_response(response),
                 )
             )
             if authorization_status in desired_status:
@@ -478,8 +393,8 @@ class Client:
                     )
                 )
 
-        self.logger.info("check_authorization_status_success")
-        return check_authorization_status_response
+        self.logger.debug("check_authorization_status_success")
+        return response
 
     def respond_to_challenge(self, acme_keyauthorization, challenge_url):
         """
@@ -525,7 +440,7 @@ class Client:
         GET request to the order resource to obtain its current state.
         """
         self.logger.info("send_csr")
-        payload = {"csr": safe_base64(self.csr)}
+        payload = {"csr": safe_base64(self.acme_csr.public_bytes())}
         send_csr_response = self.make_signed_acme_request(
             url=finalize_url, payload=json.dumps(payload)
         )
@@ -567,11 +482,6 @@ class Client:
         self.logger.info("download_certificate_success")
         return pem_certificate
 
-    def sign_message(self, message):
-        self.logger.debug("sign_message")
-        pk = OpenSSL.crypto.load_privatekey(OpenSSL.crypto.FILETYPE_PEM, self.account_key.encode())
-        return OpenSSL.crypto.sign(pk, message.encode("utf8"), self.digest)
-
     def get_nonce(self):
         """
         https://tools.ietf.org/html/draft-ietf-acme-acme#section-6.4
@@ -582,28 +492,6 @@ class Client:
         response = self.GET(self.ACME_GET_NONCE_URL)
         nonce = response.headers["Replay-Nonce"]
         return nonce
-
-    def get_jwk(self):
-        """
-        calculate the JSON Web Key (jwk) from self.account_key
-        """
-        private_key = cryptography.hazmat.primitives.serialization.load_pem_private_key(
-            self.account_key.encode(),
-            password=None,
-            backend=cryptography.hazmat.backends.default_backend(),
-        )
-        public_key_public_numbers = private_key.public_key().public_numbers()
-        # private key public exponent in hex format
-        exponent = "{0:x}".format(public_key_public_numbers.e)
-        exponent = "0{0}".format(exponent) if len(exponent) % 2 else exponent
-        # private key modulus in hex format
-        modulus = "{0:x}".format(public_key_public_numbers.n)
-        jwk = {
-            "kty": "RSA",
-            "e": safe_base64(binascii.unhexlify(exponent)),
-            "n": safe_base64(binascii.unhexlify(modulus)),
-        }
-        return jwk
 
     def get_acme_header(self, url, needs_jwk=False):
         """
@@ -616,12 +504,13 @@ class Client:
         - "url"
         """
         self.logger.debug("get_acme_header")
-        header = {"alg": "RS256", "nonce": self.get_nonce(), "url": url}
+        header = {"alg": self.account.key_desc.alg, "nonce": self.get_nonce(), "url": url}
 
         if needs_jwk:
-            header["jwk"] = self.get_jwk()
+            header["jwk"] = self.account.jwk()
         else:
-            header["kid"] = self.kid
+            header["kid"] = self.account.kid
+
         return header
 
     def make_signed_acme_request(self, url, payload, needs_jwk=False):
@@ -630,8 +519,10 @@ class Client:
         payload64 = safe_base64(payload)
         protected = self.get_acme_header(url, needs_jwk)
         protected64 = safe_base64(json.dumps(protected))
-        signature = self.sign_message(message="{0}.{1}".format(protected64, payload64))  # bytes
-        signature64 = safe_base64(signature)  # str
+        message = ("%s.%s" % (protected64, payload64)).encode("utf-8")
+        #        signature = self.sign_message(message="{0}.{1}".format(protected64, payload64))  # bytes
+        #        signature64 = safe_base64(signature)  # str
+        signature64 = safe_base64(self.account.sign_message(message))
         data = json.dumps(
             {"protected": protected64, "payload": payload64, "signature": signature64}
         )
@@ -683,6 +574,9 @@ class Client:
 
             ### TO DO ### this is the obfuscated timeout loop.  Clean this mess up!
             ### # # # ### it also keeps trying even when the auth is failed :-(
+
+            ### FIX? ### shouldn't this be checking the ORDER's status for completion?
+            #            that is at least the most frugal of queries approach...
 
             for chal in challenges:
                 # Before sending a CSR, we need to make sure the server has completed the
@@ -759,16 +653,9 @@ class Client:
         return ("", [])
 
     def cert(self):
-        """
-        convenience method to get a certificate without much hassle
-        """
+        self.logger.warning("DEPRECATED: Client.cert is deprecated as of 0.8.4")
         return self.get_certificate()
 
     def renew(self):
-        """
-        renews a certificate.
-        A renewal is actually just getting a new certificate.
-        An issuance request counts as a renewal if it contains the exact same set of hostnames as a previously issued certificate.
-            https://letsencrypt.org/docs/rate-limits/
-        """
+        self.logger.warning("DEPRECATED: Client.renew is deprecated as of 0.8.4")
         return self.cert()

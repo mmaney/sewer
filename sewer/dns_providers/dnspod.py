@@ -6,11 +6,6 @@ from . import common
 
 
 class DNSPodDns(common.BaseDns):
-    """
-    """
-
-    dns_provider_name = "dnspod"
-
     def __init__(
         self, DNSPOD_ID, DNSPOD_API_KEY, DNSPOD_API_BASE_URL="https://dnsapi.cn/", **kwargs
     ):
@@ -28,10 +23,12 @@ class DNSPodDns(common.BaseDns):
 
     def create_dns_record(self, domain_name, domain_dns_value):
         self.logger.info("create_dns_record")
+
+        ### FIX ME   ### domain is exactly last two parts (service has list of zones API?)
+        ### YUCK     ### Odd, unpythonic implementation
+        ### REFACTOR ### duplicated code (here and delete_dns_record)
+
         subd = ""
-
-        ### FIX ME ### domain is exactly last two parts (no bbc.co.uk eg.)
-
         if domain_name.count(".") != 1:  # not top level domain
             pos = domain_name.rfind(".", 0, domain_name.rfind("."))
             subd = domain_name[:pos]
@@ -71,10 +68,8 @@ class DNSPodDns(common.BaseDns):
 
     def delete_dns_record(self, domain_name, domain_dns_value):
         self.logger.info("delete_dns_record")
+
         subd = ""
-
-        ### FIX ME ### domain is exactly last two parts (no bbc.co.uk eg.)
-
         if domain_name.count(".") != 1:  # not top level domain
             pos = domain_name.rfind(".", 0, domain_name.rfind("."))
             subd = domain_name[:pos]

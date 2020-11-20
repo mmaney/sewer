@@ -2,7 +2,7 @@ import codecs, json, os
 from setuptools import setup, find_packages
 
 # long description comes from README.md
-with codecs.open(os.path.join("docs", "README.md"), "r", encoding="utf8") as f:
+with codecs.open("README.md", "r", encoding="utf8") as f:
     long_description = f.read()
 ldct = "text/markdown"
 
@@ -47,11 +47,11 @@ setup(
         "Programming Language :: Python :: 3.8",
     ],
     packages=find_packages(exclude=["docs", "*tests*"]),
-    install_requires=["requests", "pyopenssl", "cryptography"],
+    install_requires=["requests", "cryptography"],
     extras_require=dict(
         provider_deps_map,
-        dev=["coverage", "twine", "wheel"],
-        test=["pylint==2.3.1", "black==18.9b0"],
+        dev=["twine", "wheel"],
+        test=["mypy>=0.780", "coverage>=5.0", "pytest>=6.0", "pylint>=2.6.0", "black==19.10b0"],
         alldns=all_deps_of_all_providers,
     ),
     # data files to be placed in project directory, not zip safe but zips suck anyway
@@ -66,5 +66,8 @@ setup(
     #     ],
     # },
     entry_points={"console_scripts": ["sewer=sewer.cli:main", "sewer-cli=sewer.cli:main"]},
-    **meta,
+    ### CANNOT FIX ### black sometimes ignores explicit version and adds the invalid comma anyway
+    # fmt: off
+    **meta
+    # fmt: on
 )

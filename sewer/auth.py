@@ -1,5 +1,6 @@
-from .lib import create_logger, LoggerType
 from typing import Any, Dict, Optional, Sequence, Tuple, Union, cast
+
+from .lib import create_logger, LoggerType
 
 ChalItemType = Dict[str, str]
 ChalListType = Sequence[ChalItemType]
@@ -20,7 +21,7 @@ class ProviderBase:
         LOG_LEVEL: str = "INFO",
         prop_delay: int = 0,
         prop_timeout: int = 0,
-        prop_sleep_times: Union[Sequence[int], int] = (1, 2, 4, 8)
+        prop_sleep_times: Union[Sequence[int], int] = (1, 2, 4, 8),
     ) -> None:
 
         # TypeError if missing, still check that it's a sequencey value; non-str vals, meh
@@ -88,10 +89,10 @@ class DNSProviderBase(ProviderBase):
     def cname_domain(self, chal: Dict[str, str]) -> Union[str, None]:
         "returns fqdn where CNAME should be if aliasing, else None"
 
-        return "_acme-challenge." + chal["domain"] if self.alias else None
+        return "_acme-challenge." + chal["ident_value"] if self.alias else None
 
     def target_domain(self, chal: Dict[str, str]) -> str:
         "returns fqdn where challenge TXT should be placed"
 
-        d = chal["domain"]
+        d = chal["ident_value"]
         return "_acme-challenge." + d if not self.alias else d + "." + self.alias

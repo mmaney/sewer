@@ -28,9 +28,9 @@ README.html
 .vscode/
 .DS_Store
 
-#Coverage
-.coverage
-htmlcov/
+# testing artifacts, temp files, etc.
+/tests/coverage/
+/tests/tmp/
 
 # Setuptools distribution folder.
 /dist/
@@ -46,6 +46,7 @@ htmlcov/
 *.csr
 *.crt
 *.key
+*.pem
 .idea
 .vscode
 

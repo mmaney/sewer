@@ -1,5 +1,79 @@
-## `sewer` changelog:
-most recent version is listed first.   
+# `sewer` changelog:
+
+## **pre-release** 0.8.5
+
+- driver for Windows DNS server (local only) [IN PROGRESS]
+
+- cleanup that was deferred from 0.8.4 (affects developers, not cli users)
+
+  - crypto.py refactored
+
+  - mypy added to tests
+
+    - dns_providers have had non-base imports cleaned up: use local `# type:
+      ignore` annotations
+
+    - a few non-service-specific libs marked globally to be ignored
+
+  - REMOVED obsolescent dns_provider_name class variables (use the JSON
+    catalog, added in 0.8.3)
+
+  - REMOVED obsolescent guards around service-specific imports and the
+    corresponding delayed exceptions (the unnecessary imports that used to
+    require the guards were removed in 0.8.3)
+
+  - crypto.py's tests migrated to pytest format as tests/crypto_test.py
+
+- Fixed the alias support code and unbound_ssh, its only in-tree client, to
+  use correct names for alias option parameters
+
+- Aliasing document updated to current client options
+
+- in-tree tests began migrating to pytest format (and moving to ./tests)
+
+## **version:** 0.8.4
+
+- add support for ECDSA keys
+
+CLI changes:
+
+- `--acct_key` & `--cert_key` should be used to designate the file that
+  holds the keys to be used (rather than having new ones generated). 
+  `--account_key` & `--certificate_key` are still accepted as synonyms.
+
+- add `--acct_key_type` & `--cert_key_type` to allow choice of RSA or EC
+  keys and key sizes when sewer is generating them for you.
+
+- changed default for generated keys to 3072 bit RSA (had been 2048 bit)
+
+- add `--is_new_key` to allow for first-time registration of your own
+  account key (using `--acct_key`) generated outside of sewer.
+
+Internal changes for library clients:
+
+- Client methods cert() and renew() are deprecated; just call
+  get_certificate() directly instead.
+
+- Client **no longer generates keys**.  (see below)
+
+- crytographic refactoring
+
+  - AcmeKey, AcmeAccount & AcmeCsr in crypto.py; uses only cryptography library
+
+- Client interface changes due to crypto refactoring
+
+  - dropped `account_key` and `certificate_key` optional arguments to Client
+
+  - added `acct_key` and `cert_key` REQUIRED arguments to Client taking
+    AcmeAccount and AcmeKey objects, respectively.
+
+  - add `is_new_acct` argument to force registration of the supplied account
+    key
+
+  - dropped `bits` argument because Client no longer generates keys!
+
+  - dropped `digest` argument since there are currently no alternate digest
+    methods for the different key types.  (was this ever used?)
 
 ## **version:** 0.8.3
 
